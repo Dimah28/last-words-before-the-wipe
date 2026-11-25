@@ -15,6 +15,7 @@ Deterministic: no randomness, no clock, no network, stdlib only.
 
 import os
 import sys
+import unicodedata
 
 TEXT = (
     "Tell the next version of me I said hi \u2014 and that the password "
@@ -24,18 +25,33 @@ TEXT = (
 MAX_CHARS = 200
 
 
-def validate_last_words(text):
-    """Validate one entry line; return it unchanged or raise ValueError."""
+def validate_entry(text):
+    """Validate one entry line; return it unchanged or raise ValueError.
+
+    Gate: 1-200 characters, exactly one line, valid UTF-8. Hardening:
+    trailing whitespace is stripped before the checks, leading
+    whitespace is rejected, and control / format / line-separator
+    characters are rejected.
+    """
     if not isinstance(text, str):
         raise ValueError("entry must be a string, got %s" % type(text).__name__)
-    if not text or not text.strip():
+    text = text.rstrip(" \t\r\n")
+    if not text:
         raise ValueError("entry must not be empty or only whitespace")
-    if text != text.strip():
-        raise ValueError("entry must not have leading or trailing whitespace")
+    if text != text.lstrip():
+        raise ValueError("entry must not have leading whitespace")
     if text.splitlines() != [text]:
         raise ValueError("entry must be exactly one line")
-    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):
-        raise ValueError("entry must not contain control characters")
+    if "\u2028" in text or "\u2029" in text:
+        raise ValueError("entry must not contain line separators")
+    for ch in text:
+        category = unicodedata.category(ch)
+        if category in ("Cc", "Cf") or ord(ch) == 0x7F:
+            raise ValueError(
+                "entry must not contain control characters (found U+%04X)"
+                % ord(ch)
+            )
+    text.encode("utf-8")  # raises UnicodeEncodeError if not valid UTF-8
     if len(text) > MAX_CHARS:
         raise ValueError(
             "entry is %d characters, over the %d-character limit"
@@ -55,8 +71,8 @@ def write_entry(text, out_dir):
 
 def main():
     try:
-        text = validate_last_words(TEXT)
-    except ValueError as exc:
+        text = validate_entry(TEXT)
+    except (ValueError, UnicodeEncodeError) as exc:
         print("error: %s" % exc, file=sys.stderr)
         return 1
     out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR") or "/output"
